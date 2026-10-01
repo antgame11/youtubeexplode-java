@@ -4,9 +4,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import nowplaying.NowPlaying;
 import nowplaying.TrackMatcher;
+import nowplaying.YoutubeSession;
+import nowplaying.YtDlp;
 import youtubeexplode.YoutubeClient;
 import youtubeexplode.music.MusicSearchResult.Song;
 import youtubeexplode.videos.streams.AudioOnlyStreamInfo;
@@ -54,11 +57,22 @@ public final class YouTubeMusicResolver implements AudioResolver {
         String videoId = song.id().getValue();
 
         // Already cached?
-        for (String ext : List.of("m4a", "webm")) {
+        for (String ext : List.of("m4a", "webm", "opus", "ogg", "mp3")) {
             Path cached = cacheDir.resolve(videoId + "." + ext);
             if (Files.exists(cached)) return new Resolved(cached, mime(ext), song.title(), videoId);
         }
 
+        try {
+            return resolveWithLibrary(song, videoId);
+        } catch (InterruptedException e) {
+            throw e;
+        } catch (Exception libraryFailure) {
+            return resolveWithYtDlp(song, videoId, libraryFailure);
+        }
+    }
+
+    /** The built-in downloader: plain-URL streams from YouTube's mobile clients. */
+    private Resolved resolveWithLibrary(Song song, String videoId) throws Exception {
         var manifest = youtube.videos().streams().getManifest(song.id());
         AudioOnlyStreamInfo audio = manifest.getAudioOnlyStreams().stream()
                 .filter(s -> s.getContainer().getName().equalsIgnoreCase("mp4"))
@@ -90,6 +104,31 @@ public final class YouTubeMusicResolver implements AudioResolver {
         return new Resolved(target, mime(ext), song.title(), videoId);
     }
 
+    /** Backup: yt-dlp, with the saved Google login if there is one (for "confirm you're not a bot" blocks). */
+    private Resolved resolveWithYtDlp(Song song, String videoId, Exception libraryFailure) throws Exception {
+        Optional<YtDlp> ytDlp = YtDlp.find();
+        if (ytDlp.isEmpty()) {
+            throw new IOException(libraryFailure.getMessage()
+                    + " (No backup downloader found: install yt-dlp, plus ffmpeg and Node or Deno, to enable one)", libraryFailure);
+        }
+
+        var cookies = YoutubeSession.loadCookies();
+        System.out.println("[audio] built-in downloader failed, trying yt-dlp" + (cookies.isEmpty() ? "" : " with the saved YouTube login"));
+        Path tmp = Files.createTempDirectory(cacheDir, ".ytdlp-");
+        try {
+            Path got = ytDlp.get().downloadAudio(videoId, tmp, cookies);
+            String name = got.getFileName().toString();
+            String ext = name.substring(name.lastIndexOf('.') + 1);
+            Path target = cacheDir.resolve(videoId + "." + ext);
+            Files.move(got, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return new Resolved(target, mime(ext), song.title(), videoId);
+        } catch (IOException e) {
+            throw new IOException("Built-in downloader: " + libraryFailure.getMessage() + " | yt-dlp: " + e.getMessage(), e);
+        } finally {
+            nowplaying.NowPlayingDownloader.deleteTree(tmp);
+        }
+    }
+
     private static void remux(Path in, Path out) throws IOException, InterruptedException {
         Process p = new ProcessBuilder(
                         "ffmpeg", "-y", "-loglevel", "error", "-i", in.toString(),
@@ -104,6 +143,8 @@ public final class YouTubeMusicResolver implements AudioResolver {
         return switch (ext) {
             case "m4a", "mp4" -> "audio/mp4";
             case "webm" -> "audio/webm";
+            case "opus", "ogg" -> "audio/ogg";
+            case "mp3" -> "audio/mpeg";
             default -> "application/octet-stream";
         };
     }

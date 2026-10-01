@@ -1,6 +1,7 @@
 package nowplaying;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -8,6 +9,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import youtubeexplode.YoutubeClient;
+import youtubeexplode.exceptions.YoutubeExplodeException;
 import youtubeexplode.music.MusicSearchResult.Song;
 import youtubeexplode.videos.streams.AudioOnlyStreamInfo;
 import youtubeexplode.videos.streams.StreamInfo;
@@ -56,16 +58,31 @@ public final class NowPlayingDownloader {
             return Optional.empty();
         }
 
+        String baseName = sanitize(track.artistLine() + " - " + track.title());
+        Files.createDirectories(outDir);
+
+        // Already downloaded (in whatever format)?
+        for (String ext : List.of("m4a", "webm", "mp4", "opus", "mp3")) {
+            Path existing = outDir.resolve(baseName + "." + ext);
+            if (Files.exists(existing)) {
+                System.out.println("  Already downloaded: " + existing);
+                return Optional.empty();
+            }
+        }
+
+        try {
+            return Optional.of(downloadWithLibrary(song, baseName));
+        } catch (YoutubeExplodeException | UncheckedIOException e) {
+            System.err.println("\n  The built-in downloader failed: " + e.getMessage());
+            return Optional.of(downloadWithYtDlp(song, baseName, e));
+        }
+    }
+
+    private Path downloadWithLibrary(Song song, String baseName) throws IOException {
         var manifest = youtube.videos().streams().getManifest(song.id());
         AudioOnlyStreamInfo audio = StreamInfo.getWithHighestBitrate(manifest.getAudioOnlyStreams());
 
-        Files.createDirectories(outDir);
-        Path file = outDir.resolve(sanitize(track.artistLine() + " - " + track.title()) + "." + audio.getContainer());
-        if (Files.exists(file)) {
-            System.out.println("  Already downloaded: " + file);
-            return Optional.empty();
-        }
-
+        Path file = outDir.resolve(baseName + "." + audio.getContainer());
         Path partial = file.resolveSibling(file.getFileName() + ".part");
         int[] last = {-1};
         youtube.videos().streams().download(audio, partial, p -> {
@@ -77,7 +94,46 @@ public final class NowPlayingDownloader {
         });
         Files.move(partial, file);
         System.out.println("\r  Saved: " + file + " (" + audio.getSize() + ", " + audio.getBitrate() + ")");
-        return Optional.of(file);
+        return file;
+    }
+
+    /** Backup: let yt-dlp do it, with the saved Google login if there is one. */
+    private Path downloadWithYtDlp(Song song, String baseName, RuntimeException libraryFailure) throws IOException {
+        Optional<YtDlp> ytDlp = YtDlp.find();
+        if (ytDlp.isEmpty()) {
+            System.err.println("  No backup downloader found. Install yt-dlp (plus ffmpeg, and Node or Deno) to enable one:");
+            System.err.println("  https://github.com/yt-dlp/yt-dlp");
+            throw libraryFailure;
+        }
+
+        var cookies = YoutubeSession.loadCookies();
+        System.out.println("  Trying yt-dlp" + (cookies.isEmpty() ? "" : " with your saved YouTube login") + "...");
+
+        Path tmp = Files.createTempDirectory(outDir, ".ytdlp-");
+        try {
+            Path got = ytDlp.get().downloadAudio(song.id().getValue(), tmp, cookies);
+            String name = got.getFileName().toString();
+            Path target = outDir.resolve(baseName + name.substring(name.lastIndexOf('.')));
+            Files.move(got, target);
+            System.out.println("  Saved: " + target + " (yt-dlp)");
+            return target;
+        } catch (IOException e) {
+            throw new YoutubeExplodeException("Could not download '" + song.title() + "'. Built-in downloader: "
+                    + libraryFailure.getMessage() + " | yt-dlp: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        } finally {
+            deleteTree(tmp);
+        }
+    }
+
+    public static void deleteTree(Path dir) {
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+        } catch (IOException ignored) {
+            // Temporary files: best effort
+        }
     }
 
     static String sanitize(String name) {

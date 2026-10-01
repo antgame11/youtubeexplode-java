@@ -22,6 +22,17 @@ public final class YoutubeSession {
         return Files.exists(cookiesFile());
     }
 
+    /** The saved login, or an empty list if there is none (or it cannot be read). */
+    public static List<HttpCookie> loadCookies() {
+        Path file = cookiesFile();
+        if (!Files.exists(file)) return List.of();
+        try {
+            return CookieStore.load(file);
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
     public static YoutubeClient open() {
         Path file = cookiesFile();
         YoutubeClient youtube = YoutubeClient.withLogin(file);
