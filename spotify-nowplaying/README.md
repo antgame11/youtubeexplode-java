@@ -37,26 +37,41 @@ It reads `SPOTIFY_CLIENT_ID` from the environment or from a `.env` file next to 
 folder you run it from, or their parent folders). `run.sh` and `web.sh` are just shortcuts that build the
 jar if needed and run it.
 
-## Signing in to YouTube (experimental, usually not needed)
+## When YouTube blocks the download: yt-dlp backup + Google login
+
+On some networks (servers, VPNs, shared or datacenter IP addresses) YouTube answers
+`Video '...' is not available ... LOGIN_REQUIRED - Sign in to confirm you're not a bot`. The built-in downloader
+can't get past that, and a Google login doesn't help it (YouTube's mobile clients ignore logins, and the clients
+that honor one return streams scrambled by a player script only a JavaScript engine can unscramble).
+
+So when the built-in downloader fails, the app automatically falls back to **[yt-dlp](https://github.com/yt-dlp/yt-dlp)**,
+passing it your saved Google login. yt-dlp is updated almost daily to keep up with YouTube and can solve the player
+script with Node or Deno. You'll see:
+
+```
+  The built-in downloader failed: ...
+  Trying yt-dlp with your saved YouTube login...
+  Saved: Artist - Title.m4a (yt-dlp)
+```
+
+Setup, once, on the machine that gets blocked:
+
+```bash
+sudo apt install ffmpeg nodejs        # audio extraction + a JavaScript runtime (or install Deno)
+pipx install yt-dlp                   # or: sudo apt install yt-dlp   (a recent version matters; keep it updated)
+./run.sh login                        # sign in to Google once (needs a screen, see below)
+```
+
+- yt-dlp is found on the PATH, or set `YT_DLP=/path/to/yt-dlp` in `.env`. Without it the app just reports the
+  built-in downloader's error and tells you to install it.
+- The saved login is handed to yt-dlp as a temporary cookie file that is deleted right afterwards.
+- yt-dlp may download its challenge-solver script from GitHub on first use (`--remote-components ejs:github`).
+- If it still fails with "confirm you're not a bot" even with the login, that IP address is blocked hard: use another
+  network. If yt-dlp itself stops working, update it first (`pipx upgrade yt-dlp`).
+- The web player uses the same fallback (the file lands in `audio-cache/`).
 
 `./run.sh login` opens a browser, you sign in to Google, and the cookies are saved to
 `~/.config/youtubeexplode/cookies.json` (readable only by you; `./run.sh logout` deletes them).
-
-**What it does and doesn't do today.** Tested against the live service:
-
-- Downloads use YouTube's VisionOS and Android clients. Those clients **ignore a Google login completely**
-  (an age-restricted video still says "sign in to confirm your age" with your cookies attached), so the saved
-  login does **not** make more videos downloadable and does **not** get past an IP block.
-- The clients that do honor a login (TV, web, mobile web) only return streams ciphered with YouTube's current,
-  heavily obfuscated player script. Decoding that needs a JavaScript engine running the script (this is why
-  yt-dlp now needs Deno or Node), which this library does not have.
-- So the login is kept for future use (and for the web page requests), but don't expect it to fix
-  `Video '...' is not available`.
-
-If you do see that error, the message now lists what each YouTube client answered, for example
-`VisionOS: ... YouTube said: LOGIN_REQUIRED - Sign in to confirm you're not a bot | Android: ...`.
-That text is the real cause. Typically it is YouTube blocking the IP address (servers, VPNs, shared or
-datacenter addresses). Running from a normal home connection is what fixes that.
 
 Notes on the login window: Google refuses sign-ins from embedded browsers and from browsers that look
 automated ("This browser or app may not be secure"). Chrome marks itself as automated whenever remote

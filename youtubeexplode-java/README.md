@@ -42,7 +42,8 @@ try (var youtube = YoutubeClient.withLogin(CookieStore.defaultPath())) { ... }
 `CookieStore.load` also reads a Netscape `cookies.txt`. Treat the file like a password. **Limits (tested against
 the live service):** the clients that return plain download URLs (VisionOS, Android) ignore a login, and the
 clients that honor one return ciphered streams that need a JavaScript engine to decode, so a login does not
-unlock downloads or get past IP blocks today. Cookies and the signed `Authorization` header must not be sent
+unlock downloads or get past IP blocks through this library. (The spotify-nowplaying app falls back to yt-dlp with the saved
+login for that case.) Cookies and the signed `Authorization` header must not be sent
 together to anything but the web clients (YouTube answers HTTP 400), so the library sends the mobile clients no
 login and the TV client cookies only. Errors from the player endpoint list what every client answered.
 

@@ -28,10 +28,9 @@ cd spotify-nowplaying
 ./web.sh --card-only          # just the now-playing card: /now.svg (GitHub profile) and /embed
 ```
 
-If YouTube answers "video not available" on a machine, the error lists what each YouTube client said. It is
-usually an IP block (servers, VPNs, datacenter addresses): run from a normal home connection. A Google login
-(`./run.sh login`) does not help with that today; see
-[spotify-nowplaying/README.md](spotify-nowplaying/README.md#signing-in-to-youtube-experimental-usually-not-needed).
+If YouTube answers "Sign in to confirm you're not a bot" on a machine (common on servers and VPNs), the app falls
+back to yt-dlp with your saved Google login: install `yt-dlp`, `ffmpeg` and Node, run `./run.sh login` once. See
+[spotify-nowplaying/README.md](spotify-nowplaying/README.md#when-youtube-blocks-the-download-yt-dlp-backup--google-login).
 
 `mvn package` makes one self-contained jar, so you can also just run `java -jar` on it anywhere.
 The app reads `.env` itself (next to the jar or in the folder you run it from). The first run opens a browser for Spotify

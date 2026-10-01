@@ -21,7 +21,7 @@ public final class Main {
                          Options: --web-port 8080  --host 127.0.0.1  --cache DIR  --offset-ms 0
                                   --card-only (only the /now.svg card and /embed, no audio)
               login      Sign in to your Google account in a browser window and save the login
-                         (experimental: it does not currently make more videos downloadable). Needs a screen.
+                         It is handed to the yt-dlp backup downloader (see README). Needs a screen.
               logout     Delete the saved login.
 
             Settings come from environment variables or a .env file: SPOTIFY_CLIENT_ID,
@@ -53,10 +53,9 @@ public final class Main {
         } catch (YoutubeExplodeException e) {
             // A readable message instead of a stack trace
             System.err.println("YouTube error: " + e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("not available")) {
-                System.err.println("Hint: the message above says what each YouTube client answered. A block on your IP address "
-                        + "(servers, VPNs, shared addresses) is the usual cause; a normal home connection fixes it. "
-                        + "A Google login does not help with that.");
+            if (e.getMessage() != null && (e.getMessage().contains("not available") || e.getMessage().contains("bot"))) {
+                System.err.println("Hint: YouTube is probably blocking this machine's IP address. Install yt-dlp, ffmpeg and Node, then run "
+                        + "`java -jar spotify-nowplaying.jar login`: the app uses yt-dlp with your login as a backup.");
             }
             System.exit(1);
         }
