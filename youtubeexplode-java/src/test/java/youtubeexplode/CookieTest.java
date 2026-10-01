@@ -122,4 +122,48 @@ class CookieTest {
         assertEquals(List.of("SAPISID", "LOGIN_INFO"), loaded.stream().map(HttpCookie::getName).toList());
         assertEquals(-1, loaded.get(1).getMaxAge()); // expiry 0 = session
     }
+
+    // ---- Login cookies must not reach the mobile app clients ----
+
+    private static CookieJar jarWithLogin() {
+        CookieJar jar = new CookieJar();
+        long now = System.currentTimeMillis();
+        jar.put(new CookieJar.Entry("SOCS", "consent", "youtube.com", "/", true, Long.MAX_VALUE));
+        jar.put(new CookieJar.Entry("VISITOR_INFO1_LIVE", "visitor", "youtube.com", "/", true, Long.MAX_VALUE));
+        jar.put(CookieJar.entryOf(cookie("SAPISID", "secret", ".youtube.com", "/", true, -1), "youtube.com", now).asLogin());
+        jar.put(CookieJar.entryOf(cookie("LOGIN_INFO", "li", ".youtube.com", "/", true, -1), "youtube.com", now).asLogin());
+        return jar;
+    }
+
+    @Test
+    void anonymousHeaderExcludesLoginCookiesButKeepsTheRest() {
+        CookieJar jar = jarWithLogin();
+        URI uri = URI.create("https://www.youtube.com/youtubei/v1/player");
+
+        String all = jar.header(uri);
+        assertTrue(all.contains("SAPISID=secret") && all.contains("LOGIN_INFO=li") && all.contains("SOCS=consent"));
+
+        String anonymous = jar.anonymousHeader(uri);
+        assertFalse(anonymous.contains("SAPISID") || anonymous.contains("LOGIN_INFO"));
+        assertTrue(anonymous.contains("SOCS=consent") && anonymous.contains("VISITOR_INFO1_LIVE=visitor"));
+        assertTrue(jar.hasLogin());
+    }
+
+    @Test
+    void rotatedLoginCookiesStayLoginCookies() {
+        CookieJar jar = jarWithLogin();
+        // YouTube rotates a cookie: the Set-Cookie response is not marked as "login" but replaces one that is
+        jar.put(CookieJar.entryOf(cookie("SAPISID", "rotated", ".youtube.com", "/", true, -1), "youtube.com", System.currentTimeMillis()));
+
+        URI uri = URI.create("https://www.youtube.com/");
+        assertTrue(jar.header(uri).contains("SAPISID=rotated"));
+        assertFalse(jar.anonymousHeader(uri).contains("SAPISID"));
+    }
+
+    @Test
+    void noLoginMeansNoLogin() {
+        CookieJar jar = new CookieJar();
+        jar.put(new CookieJar.Entry("SOCS", "consent", "youtube.com", "/", true, Long.MAX_VALUE));
+        assertFalse(jar.hasLogin());
+    }
 }

@@ -30,6 +30,8 @@ public final class YoutubeHttp implements AutoCloseable {
     private static final String DEFAULT_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36";
 
+    private static final String DEFAULT_SOCS = "CAISEwgDEgk4MTM4MzYzNTIaAmVuIAEaBgiApPzGBg";
+
     private static volatile HttpClient sharedClient;
 
     private final HttpClient client;
@@ -44,10 +46,15 @@ public final class YoutubeHttp implements AutoCloseable {
         // becomes invalid and needs to be manually replaced in code with a new one.
         // https://policies.google.com/technologies/cookies/embedded
         long now = System.currentTimeMillis();
-        cookies.put(new CookieJar.Entry("SOCS", "CAISEwgDEgk4MTM4MzYzNTIaAmVuIAEaBgiApPzGBg", "youtube.com", "/", true, Long.MAX_VALUE));
+        cookies.put(new CookieJar.Entry("SOCS", DEFAULT_SOCS, "youtube.com", "/", true, Long.MAX_VALUE));
 
         // Cookies without a domain are assumed to belong to youtube.com
-        for (HttpCookie cookie : initialCookies) cookies.put(CookieJar.entryOf(cookie, "youtube.com", now));
+        for (HttpCookie cookie : initialCookies) cookies.put(CookieJar.entryOf(cookie, "youtube.com", now).asLogin());
+    }
+
+    /** Whether the client was given a login (cookies) that has not expired. */
+    public boolean hasLogin() {
+        return cookies.hasLogin();
     }
 
     /** Current cookies, including any YouTube has rotated since the client was created. */
@@ -61,7 +68,10 @@ public final class YoutubeHttp implements AutoCloseable {
             synchronized (YoutubeHttp.class) {
                 c = sharedClient;
                 if (c == null) {
-                    c = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+                    c = HttpClient.newBuilder()
+                            .followRedirects(HttpClient.Redirect.NORMAL)
+                            .connectTimeout(java.time.Duration.ofSeconds(20))
+                            .build();
                     sharedClient = c;
                 }
             }
@@ -69,8 +79,17 @@ public final class YoutubeHttp implements AutoCloseable {
         return c;
     }
 
-    /** Request description; a new {@link HttpRequest} is built for every attempt. */
-    public record Request(String method, String url, String body, Map<String, String> headers) {
+    /**
+     * Request description; a new {@link HttpRequest} is built for every attempt.
+     *
+     * @param anonymous do not send the user's login (cookies and Authorization). YouTube's mobile app clients
+     *     (iOS, Android, visionOS) are rejected with HTTP 400 when a web login comes along.
+     */
+    public record Request(String method, String url, String body, Map<String, String> headers, boolean anonymous) {
+        public Request(String method, String url, String body, Map<String, String> headers) {
+            this(method, url, body, headers, false);
+        }
+
         public static Request get(String url) {
             return new Request("GET", url, null, Map.of());
         }
@@ -90,11 +109,22 @@ public final class YoutubeHttp implements AutoCloseable {
         public static Request postJson(String url, String json, Map<String, String> headers) {
             return new Request("POST", url, json, headers);
         }
+
+        public Request asAnonymous() {
+            return new Request(method, url, body, headers, true);
+        }
     }
 
     private static boolean isYoutubeHost(URI uri) {
         String host = uri.getHost();
         return host != null && (host.equals("youtube.com") || host.endsWith(".youtube.com"));
+    }
+
+    /** The cookies an anonymous client would have: no login, but always the consent cookie. */
+    private String anonymousCookieHeader(URI uri) {
+        String header = cookies.anonymousHeader(uri);
+        if (header == null) return "SOCS=" + DEFAULT_SOCS;
+        return header.contains("SOCS=") ? header : header + "; SOCS=" + DEFAULT_SOCS;
     }
 
     private String tryGenerateAuthHeaderValue(URI uri) {
@@ -138,17 +168,18 @@ public final class YoutubeHttp implements AutoCloseable {
 
         if (isYoutubeHost(uri)) {
             if (!headers.containsKey("cookie")) {
-                String cookieHeader = cookies.header(uri);
+                String cookieHeader = request.anonymous() ? anonymousCookieHeader(uri) : cookies.header(uri);
                 if (cookieHeader != null) headers.put("cookie", cookieHeader);
             }
 
-            if (!headers.containsKey("authorization")) {
+            if (!request.anonymous() && !headers.containsKey("authorization")) {
                 String auth = tryGenerateAuthHeaderValue(uri);
                 if (auth != null) headers.put("authorization", auth);
             }
         }
 
-        HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
+        // Without a timeout a stalled connection would hang forever instead of failing (and being retried)
+        HttpRequest.Builder builder = HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofSeconds(60));
         headers.forEach(builder::header);
 
         if (request.body() != null) {
@@ -225,8 +256,10 @@ public final class YoutubeHttp implements AutoCloseable {
 
     private static void ensureSuccess(HttpResponse<?> response) {
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            // Keep the start of the body: YouTube explains most rejections there
+            String detail = response.body() instanceof String text ? text : null;
             closeQuietly(response.body());
-            throw new HttpStatusException(response.statusCode(), response.uri().toString());
+            throw new HttpStatusException(response.statusCode(), response.uri().toString(), detail);
         }
     }
 

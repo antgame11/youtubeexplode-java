@@ -5,6 +5,7 @@ import java.util.Map;
 import youtubeexplode.YoutubeHttp;
 import youtubeexplode.bridge.PlayerResponse;
 import youtubeexplode.bridge.VideoWatchPage;
+import youtubeexplode.exceptions.HttpStatusException;
 import youtubeexplode.exceptions.VideoUnavailableException;
 import youtubeexplode.exceptions.VideoUnplayableException;
 import youtubeexplode.exceptions.YoutubeExplodeException;
@@ -24,10 +25,11 @@ public class VideoController {
         if (!Strings.isBlank(cached)) return cached;
 
         String body = http.string(YoutubeHttp.Request.get(
-                "https://www.youtube.com/sw.js_data",
-                Map.of(
-                        "Accept", "application/json",
-                        "User-Agent", "com.google.android.youtube/20.10.38 (Linux; U; ANDROID 11) gzip")));
+                        "https://www.youtube.com/sw.js_data",
+                        Map.of(
+                                "Accept", "application/json",
+                                "User-Agent", "com.google.android.youtube/20.10.38 (Linux; U; ANDROID 11) gzip"))
+                .asAnonymous());
 
         if (body.startsWith(")]}'")) body = body.substring(4);
 
@@ -56,9 +58,14 @@ public class VideoController {
         }
     }
 
-    private PlayerResponse requestPlayerResponse(VideoId videoId, String body, String userAgent) {
-        String raw = http.string(YoutubeHttp.Request.postJson(
-                "https://www.youtube.com/youtubei/v1/player", body, Map.of("User-Agent", userAgent)));
+    /**
+     * @param anonymous mobile app clients must not be sent the web login (cookies, Authorization): YouTube
+     *     answers those requests with HTTP 400
+     */
+    private PlayerResponse requestPlayerResponse(VideoId videoId, String body, String userAgent, boolean anonymous) {
+        YoutubeHttp.Request request = YoutubeHttp.Request.postJson(
+                "https://www.youtube.com/youtubei/v1/player", body, Map.of("User-Agent", userAgent));
+        String raw = http.string(anonymous ? request.asAnonymous() : request);
 
         PlayerResponse playerResponse = PlayerResponse.parse(raw);
 
@@ -109,7 +116,8 @@ public class VideoController {
         return requestPlayerResponse(
                 videoId,
                 body,
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15");
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+                true);
     }
 
     private PlayerResponse getPlayerResponseForAndroid(VideoId videoId, String visitorData) {
@@ -135,7 +143,7 @@ public class VideoController {
                 """.formatted(Json.encode(videoId.getValue()), Json.encode(visitorData));
 
         return requestPlayerResponse(
-                videoId, body, "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip");
+                videoId, body, "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip", true);
     }
 
     private PlayerResponse getPlayerResponseForTv(VideoId videoId, String visitorData, String signatureTimestamp) {
@@ -166,7 +174,8 @@ public class VideoController {
         return requestPlayerResponse(
                 videoId,
                 body,
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36");
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36",
+                false);
     }
 
     public PlayerResponse getPlayerResponse(VideoId videoId, String signatureTimestamp) {
@@ -179,9 +188,16 @@ public class VideoController {
         try {
             // VisionOS is the primary client, as it works for most videos
             return getPlayerResponseForVisionOs(videoId, visitorData);
-        } catch (VideoUnplayableException ex) {
+        } catch (VideoUnplayableException | HttpStatusException first) {
             // Android is used as a fallback as it works for certain other videos, such as videos intended for kids
-            return getPlayerResponseForAndroid(videoId, visitorData);
+            try {
+                return getPlayerResponseForAndroid(videoId, visitorData);
+            } catch (VideoUnplayableException | HttpStatusException second) {
+                // The mobile clients cannot use a login. If we have one, the TV client can: it is the way past
+                // checks that block anonymous requests (for example from server IP addresses).
+                if (http.hasLogin()) return getPlayerResponseForTv(videoId, visitorData, null);
+                throw second;
+            }
         }
     }
 

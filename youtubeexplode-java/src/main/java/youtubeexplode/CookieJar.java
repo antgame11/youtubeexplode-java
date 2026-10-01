@@ -12,7 +12,16 @@ import java.util.Locale;
  * name-to-value map breaks with real browser cookies: Google sets the same names on several domains.)
  */
 final class CookieJar {
-    record Entry(String name, String value, String domain, String path, boolean secure, long expiresAtMs) {
+    /** @param login true for cookies of the user's login (as opposed to the consent/visitor cookies YouTube sets anyway) */
+    record Entry(String name, String value, String domain, String path, boolean secure, long expiresAtMs, boolean login) {
+        Entry(String name, String value, String domain, String path, boolean secure, long expiresAtMs) {
+            this(name, value, domain, path, secure, expiresAtMs, false);
+        }
+
+        Entry asLogin() {
+            return new Entry(name, value, domain, path, secure, expiresAtMs, true);
+        }
+
         boolean expired(long now) {
             return expiresAtMs <= now;
         }
@@ -45,8 +54,20 @@ final class CookieJar {
 
     /** Adds or replaces a cookie (same name, domain and path). An already expired cookie deletes it. */
     synchronized void put(Entry entry) {
-        entries.removeIf(e -> e.name().equals(entry.name()) && e.domain().equals(entry.domain()) && e.path().equals(entry.path()));
-        if (!entry.expired(System.currentTimeMillis())) entries.add(entry);
+        // A rotated value of a login cookie is still a login cookie
+        boolean replacesLogin = entries.stream().anyMatch(e -> e.login() && sameCookie(e, entry));
+        entries.removeIf(e -> sameCookie(e, entry));
+        if (entry.expired(System.currentTimeMillis())) return;
+        entries.add(replacesLogin && !entry.login() ? entry.asLogin() : entry);
+    }
+
+    private static boolean sameCookie(Entry a, Entry b) {
+        return a.name().equals(b.name()) && a.domain().equals(b.domain()) && a.path().equals(b.path());
+    }
+
+    synchronized boolean hasLogin() {
+        long now = System.currentTimeMillis();
+        return entries.stream().anyMatch(e -> e.login() && !e.expired(now));
     }
 
     synchronized boolean isEmpty() {
@@ -55,9 +76,18 @@ final class CookieJar {
 
     /** Value for a {@code Cookie} header, or null if no cookie applies. Longer paths come first. */
     synchronized String header(URI uri) {
+        return header(uri, true);
+    }
+
+    /** Like {@link #header(URI)} but without the user's login cookies. */
+    synchronized String anonymousHeader(URI uri) {
+        return header(uri, false);
+    }
+
+    private String header(URI uri, boolean includeLogin) {
         long now = System.currentTimeMillis();
         List<Entry> matching = entries.stream()
-                .filter(e -> e.matches(uri, now))
+                .filter(e -> e.matches(uri, now) && (includeLogin || !e.login()))
                 .sorted((a, b) -> Integer.compare(b.path().length(), a.path().length()))
                 .toList();
         if (matching.isEmpty()) return null;
