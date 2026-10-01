@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Now Playing</title>
+<style>
+  :root {
+    --bg: #0d0d10; --card: #17171c; --text: #f2f2f5; --muted: #9a9aa6; --accent: #1ed760; --track: #2a2a33;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f1f1f4; --card: #ffffff; --text: #16161a; --muted: #6b6b78; --track: #deDEE5; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; place-items: center; padding: 16px; overflow: hidden;
+  }
+  #backdrop {
+    position: fixed; inset: -40px; background-size: cover; background-position: center;
+    filter: blur(60px) saturate(1.3) brightness(.5); opacity: 0; transition: opacity .8s; z-index: 0;
+  }
+  #backdrop.on { opacity: .7; }
+  main {
+    position: relative; z-index: 1; width: min(420px, 100%); background: color-mix(in srgb, var(--card) 88%, transparent);
+    backdrop-filter: blur(12px); border-radius: 20px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+  }
+  #cover {
+    width: 100%; aspect-ratio: 1; border-radius: 12px; background: var(--track) center/cover no-repeat;
+    display: grid; place-items: center; color: var(--muted); font-size: 14px;
+  }
+  h1 { font-size: 22px; margin: 18px 0 2px; overflow-wrap: anywhere; }
+  #artist, #album { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+  #album { font-size: 14px; }
+  .bar { height: 6px; background: var(--track); border-radius: 3px; margin-top: 18px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); }
+  .times { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 20px; cursor: pointer;
+    background: var(--accent); color: #04120a;
+  }
+  button.off { background: var(--track); color: var(--text); }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  #status { margin-top: 14px; font-size: 13px; color: var(--muted); min-height: 1.4em; }
+  #status b { color: var(--text); font-weight: 600; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 8px; }
+  .dot.ok { background: var(--accent); } .dot.warn { background: #f5a524; } .dot.err { background: #f31260; }
+</style>
+</head>
+<body>
+<div id="backdrop"></div>
+<main>
+  <div id="cover">Nothing playing</div>
+  <h1 id="title">&nbsp;</h1>
+  <p id="artist">&nbsp;</p>
+  <p id="album">&nbsp;</p>
+  <div class="bar"><div id="progress"></div></div>
+  <div class="times"><span id="pos">0:00</span><span id="dur">0:00</span></div>
+  <div class="row">
+    <button id="listen">Listen along</button>
+    <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+  </div>
+  <div id="status"></div>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const DRIFT_SEEK_MS = 1000;      // beyond this, jump to the right position
+  const DRIFT_NUDGE_MS = 120;      // between this and the above, speed up / slow down slightly
+  const NUDGE_RATE = 0.05;         // +-5% speed (pitch is preserved) closes the gap in a few seconds
+  const POLL_MS = 1000;
+
+  // A tiny silent clip. Playing it from the click handler unlocks audio for later src changes.
+  const SILENCE = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
+  const audio = new Audio();
+  audio.preload = 'auto';
+
+  let listening = false;
+  let state = null;        // last /api/now response
+  let basis = null;        // { progressMs, at } so we can extrapolate between polls
+  let loadedTrackId = null;
+  let needsInitialSeek = false;   // a freshly loaded file starts at 0 and took time to load: seek precisely once
+  let statusKey = '';
+
+  const fmt = (ms) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+
+  function setStatus(kind, html) {
+    const key = kind + html;
+    if (key === statusKey) return;
+    statusKey = key;
+    $('status').innerHTML = '<span class="dot ' + kind + '"></span>' + html;
+  }
+
+  // Where Spotify is right now, in ms
+  function expectedMs() {
+    if (!state || !state.track || !basis) return 0;
+    if (!state.playing) return basis.progressMs;
+    return Math.min(state.track.durationMs, basis.progressMs + (performance.now() - basis.at));
+  }
+
+  function render() {
+    const t = state && state.track;
+    if (t) {
+      if ($('title').textContent !== t.title) {
+        $('title').textContent = t.title;
+        $('artist').textContent = t.artists.join(', ');
+        $('album').textContent = t.album || '';
+        document.title = t.title + ' · ' + t.artists.join(', ');
+        const url = t.imageUrl ? 'url("' + t.imageUrl + '")' : '';
+        $('cover').style.backgroundImage = url;
+        $('cover').textContent = t.imageUrl ? '' : '♪';
+        $('backdrop').style.backgroundImage = url;
+        $('backdrop').classList.toggle('on', !!url);
+        updateMediaSession(t);
+      }
+      const pos = expectedMs();
+      $('progress').style.width = (100 * pos / t.durationMs) + '%';
+      $('pos').textContent = fmt(pos);
+      $('dur').textContent = fmt(t.durationMs);
+    } else {
+      $('title').innerHTML = '&nbsp;';
+      $('artist').innerHTML = '&nbsp;';
+      $('album').innerHTML = '&nbsp;';
+      $('cover').style.backgroundImage = '';
+      $('cover').textContent = 'Nothing playing';
+      $('backdrop').classList.remove('on');
+      $('progress').style.width = '0';
+      $('pos').textContent = '0:00';
+      $('dur').textContent = '0:00';
+      document.title = 'Now Playing';
+    }
+    requestAnimationFrame(render);
+  }
+
+  function updateMediaSession(t) {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: t.title, artist: t.artists.join(', '), album: t.album || '',
+      artwork: t.imageUrl ? [{ src: t.imageUrl, sizes: '640x640' }] : [],
+    });
+  }
+
+  // Keep the <audio> element on the right track, position and play state
+  function sync() {
+    if (!state) return;
+    const t = state.track;
+
+    if (!t) {
+      audio.pause();
+      return setStatus('warn', 'Nothing is playing on Spotify');
+    }
+    if (!listening) {
+      return setStatus('warn', 'Press <b>Listen along</b> to hear it');
+    }
+
+    const a = state.audio || { status: 'pending' };
+    if (a.status === 'pending') {
+      audio.pause();
+      return setStatus('warn', 'Finding <b>' + escapeHtml(t.title) + '</b> on YouTube Music…');
+    }
+    if (a.status === 'failed') {
+      audio.pause();
+      return setStatus('err', 'No audio for this track: ' + escapeHtml(a.error || 'unknown error'));
+    }
+
+    if (loadedTrackId !== t.id) {
+      loadedTrackId = t.id;
+      needsInitialSeek = true;
+      audio.src = a.url;
+      audio.load();
+    }
+    if (audio.readyState < 1) return setStatus('warn', 'Loading…'); // 'loadedmetadata' calls sync() again
+
+    if (!state.playing) {
+      audio.pause();
+      const target = expectedMs() / 1000;
+      if (Math.abs(audio.currentTime - target) > 0.5) audio.currentTime = target;
+      return setStatus('warn', 'Paused on Spotify');
+    }
+
+    const driftMs = audio.currentTime * 1000 - expectedMs(); // > 0: we are ahead
+    if (needsInitialSeek || Math.abs(driftMs) > DRIFT_SEEK_MS) {
+      needsInitialSeek = false;
+      audio.currentTime = expectedMs() / 1000;
+      audio.playbackRate = 1;
+    } else if (Math.abs(driftMs) > DRIFT_NUDGE_MS) {
+      audio.playbackRate = driftMs > 0 ? 1 - NUDGE_RATE : 1 + NUDGE_RATE;
+    } else {
+      audio.playbackRate = 1;
+    }
+
+    if (audio.paused) {
+      audio.play().then(
+        () => setStatus('ok', 'Synced · <b>' + escapeHtml(a.match || t.title) + '</b>'),
+        () => setStatus('warn', 'Your browser blocked playback. Press <b>Listen along</b> again'));
+    } else {
+      setStatus('ok', 'Synced · <b>' + escapeHtml(a.match || t.title) + '</b>');
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function poll() {
+    try {
+      const t0 = performance.now();
+      const res = await fetch('/api/now', { cache: 'no-store' });
+      const data = await res.json();
+      const rtt = performance.now() - t0;
+      state = data;
+      // The server computed progress at roughly the midpoint of the round trip
+      basis = { progressMs: data.progressMs || 0, at: performance.now() - rtt / 2 };
+      if (data.error) setStatus('err', 'Server could not reach Spotify: ' + escapeHtml(data.error));
+      else sync();
+    } catch (e) {
+      setStatus('err', 'Lost connection to the server');
+    }
+    setTimeout(poll, POLL_MS);
+  }
+
+  $('listen').addEventListener('click', async () => {
+    if (!listening) {
+      listening = true;
+      $('listen').textContent = 'Stop listening';
+      $('listen').classList.add('off');
+      loadedTrackId = null;
+      try { audio.src = SILENCE; await audio.play(); } catch (_) { /* sync() will retry */ }
+      sync();
+    } else {
+      listening = false;
+      audio.pause();
+      loadedTrackId = null;
+      needsInitialSeek = false;
+      $('listen').textContent = 'Listen along';
+      $('listen').classList.remove('off');
+      sync();
+    }
+  });
+
+  $('volume').addEventListener('input', (e) => { audio.volume = Number(e.target.value); });
+  audio.addEventListener('loadedmetadata', sync);
+  audio.addEventListener('canplay', sync);
+  audio.addEventListener('error', () => {
+    if (listening && audio.src && !audio.src.startsWith('data:')) setStatus('err', 'The browser could not play this audio');
+  });
+
+  requestAnimationFrame(render);
+  poll();
+})();
+</script>
+</body>
+</html>

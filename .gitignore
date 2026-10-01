@@ -1,0 +1,40 @@
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+
+# Browser captures with live session cookies and auth headers
+*.har
+youtubesearch.txt
+
+# Spotify refresh token cache, in case it is ever pointed inside the repo
+spotify.json
+
+# --- Upstream C# project (separate repo, kept here only for reference) ---
+/youtubeexplode/
+
+# --- Build output ---
+target/
+*.class
+*.jar
+!.mvn/wrapper/*.jar
+
+# --- Downloaded / cached media ---
+audio-cache/
+*.part
+*.webm
+*.m4a
+*.mp4
+*.opus
+*.mp3
+
+# --- Tooling / editor ---
+node_modules/
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.DS_Store
+*.log
