@@ -190,4 +190,52 @@ class SyncServerTest {
         assertSame(SyncServer.INVALID, SyncServer.parseRange("bytes=100-", 100));
         assertSame(SyncServer.INVALID, SyncServer.parseRange("bytes=50-10", 100));
     }
+
+    @Test
+    void serves_svg_card_uncached() throws Exception {
+        source.now = Fakes.track("A", "Song A", 200_000, true, 30_000);
+        awaitAudio("ready");
+
+        var res = http.send(HttpRequest.newBuilder(URI.create(base + "/now.svg?theme=dark")).build(), HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, res.statusCode());
+        assertEquals("image/svg+xml; charset=utf-8", res.headers().firstValue("Content-Type").orElse(""));
+        assertTrue(res.headers().firstValue("Cache-Control").orElse("").contains("no-cache"));
+        assertTrue(res.body().contains("Song A"));
+        assertTrue(res.body().contains("NOW PLAYING"));
+        assertFalse(res.body().contains("prefers-color-scheme"));
+    }
+
+    @Test
+    void serves_embed_widget() throws Exception {
+        var res = http.send(HttpRequest.newBuilder(URI.create(base + "/embed")).build(), HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, res.statusCode());
+        assertTrue(res.body().contains("/api/now"));
+        assertFalse(res.body().contains("Listen along"));
+    }
+
+    @Test
+    void cardOnlyModeServesNoAudio() throws Exception {
+        Fakes.Mutable src = new Fakes.Mutable();
+        src.now = Fakes.track("A", "Song A", 200_000, true, 1_000);
+        try (Poller cardPoller = new Poller(src, null, 50);
+             SyncServer card = new SyncServer(cardPoller, null, 0, "127.0.0.1", 0)) {
+            cardPoller.start();
+            card.start();
+            String cardBase = "http://127.0.0.1:" + card.port();
+            Thread.sleep(300);
+
+            JsonNode n = mapper.readTree(http.send(HttpRequest.newBuilder(URI.create(cardBase + "/api/now")).build(),
+                    HttpResponse.BodyHandlers.ofString()).body());
+            assertEquals("Song A", n.get("track").get("title").asText());
+            assertFalse(n.has("audio"));
+
+            assertEquals(404, http.send(HttpRequest.newBuilder(URI.create(cardBase + "/audio/A")).build(),
+                    HttpResponse.BodyHandlers.discarding()).statusCode());
+            assertTrue(http.send(HttpRequest.newBuilder(URI.create(cardBase + "/now.svg")).build(),
+                    HttpResponse.BodyHandlers.ofString()).body().contains("Song A"));
+            // The root is the embeddable card, not the listen-along player
+            assertFalse(http.send(HttpRequest.newBuilder(URI.create(cardBase + "/")).build(),
+                    HttpResponse.BodyHandlers.ofString()).body().contains("Listen along"));
+        }
+    }
 }

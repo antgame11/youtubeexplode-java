@@ -25,6 +25,7 @@ cd spotify-nowplaying
 ./run.sh                      # download the song playing right now
 ./run.sh --watch              # download every new song as it starts
 ./web.sh                      # web player at http://127.0.0.1:8080
+./web.sh --card-only          # just the now-playing card: /now.svg (GitHub profile) and /embed
 ```
 
 The scripts load `.env` from the repo root automatically. The first run opens a browser for Spotify

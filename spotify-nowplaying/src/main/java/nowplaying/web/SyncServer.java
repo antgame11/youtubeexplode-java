@@ -19,7 +19,11 @@ import nowplaying.NowPlaying;
 
 /**
  * Serves the web page, a JSON endpoint describing the synced playback state, and the audio files
- * (with HTTP Range support so browsers can seek).
+ * (with HTTP Range support so browsers can seek). Also serves a compact embeddable widget
+ * ({@code /embed}) and a GitHub-profile-friendly SVG card ({@code /now.svg}).
+ *
+ * <p>With a null library the server is in "card-only" mode: no audio is resolved or served, which is
+ * what you want when exposing it publicly just to show what you are listening to.
  */
 public final class SyncServer implements AutoCloseable {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -28,6 +32,7 @@ public final class SyncServer implements AutoCloseable {
     private final TrackLibrary library;
     private final long offsetMs;
     private final HttpServer server;
+    private final ImageCache images = new ImageCache();
 
     public SyncServer(Poller poller, TrackLibrary library, long offsetMs, String host, int port) throws IOException {
         this.poller = poller;
@@ -41,7 +46,8 @@ public final class SyncServer implements AutoCloseable {
         }));
         server.createContext("/", this::handleStatic);
         server.createContext("/api/now", this::handleNow);
-        server.createContext("/audio/", this::handleAudio);
+        server.createContext("/now.svg", this::handleSvg);
+        if (library != null) server.createContext("/audio/", this::handleAudio);
     }
 
     public void start() {
@@ -66,11 +72,14 @@ public final class SyncServer implements AutoCloseable {
                 ex.sendResponseHeaders(204, -1);
                 return;
             }
-            if (!path.equals("/") && !path.equals("/index.html")) {
+            String page;
+            if (path.equals("/embed") || path.equals("/embed.html")) page = "embed.html";
+            else if (path.equals("/") || path.equals("/index.html")) page = library == null ? "embed.html" : "index.html";
+            else {
                 ex.sendResponseHeaders(404, -1);
                 return;
             }
-            try (InputStream in = SyncServer.class.getResourceAsStream("/web/index.html")) {
+            try (InputStream in = SyncServer.class.getResourceAsStream("/web/" + page)) {
                 if (in == null) {
                     ex.sendResponseHeaders(500, -1);
                     return;
@@ -85,6 +94,14 @@ public final class SyncServer implements AutoCloseable {
     }
 
     // ---- /api/now ----
+
+    /** Position within the track at {@code now}: Spotify's last report, extrapolated, plus the sync offset. */
+    private long progressAt(Poller.Snapshot snap, long now) {
+        NowPlaying t = snap.track();
+        long progress = t.progressMs();
+        if (t.isPlaying()) progress += (now - snap.fetchedAtMs()) + offsetMs;
+        return Math.max(0, Math.min(progress, t.durationMs()));
+    }
 
     ObjectNode describeNow(long now) {
         Poller.Snapshot snap = poller.snapshot();
@@ -102,10 +119,7 @@ public final class SyncServer implements AutoCloseable {
         root.put("playing", t.isPlaying());
 
         // Spotify only tells us the position as of the last poll, so extrapolate to "now"
-        long progress = t.progressMs();
-        if (t.isPlaying()) progress += (now - snap.fetchedAtMs()) + offsetMs;
-        progress = Math.max(0, Math.min(progress, t.durationMs()));
-        root.put("progressMs", progress);
+        root.put("progressMs", progressAt(snap, now));
 
         ObjectNode track = root.putObject("track");
         track.put("id", t.trackId());
@@ -114,6 +128,8 @@ public final class SyncServer implements AutoCloseable {
         track.put("album", t.album());
         track.put("durationMs", t.durationMs());
         track.put("imageUrl", t.imageUrl());
+
+        if (library == null) return root; // card-only: no audio information
 
         ObjectNode audio = root.putObject("audio");
         TrackLibrary.Entry entry = t.trackId() == null ? null : library.peek(t.trackId());
@@ -136,6 +152,36 @@ public final class SyncServer implements AutoCloseable {
             byte[] body = MAPPER.writeValueAsBytes(describeNow(System.currentTimeMillis()));
             ex.getResponseHeaders().add("Content-Type", "application/json; charset=utf-8");
             ex.getResponseHeaders().add("Cache-Control", "no-store");
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+        }
+    }
+
+    // ---- /now.svg ----
+
+    String renderSvg(long now, NowPlayingSvg.Theme theme) {
+        Poller.Snapshot snap = poller.snapshot();
+        NowPlaying t = snap.track();
+        if (t == null) return NowPlayingSvg.render(null, 0, null, theme);
+        return NowPlayingSvg.render(t, progressAt(snap, now), images.dataUri(t.thumbUrl()), theme);
+    }
+
+    private void handleSvg(HttpExchange ex) throws IOException {
+        try (ex) {
+            String query = ex.getRequestURI().getRawQuery();
+            String theme = null;
+            if (query != null) {
+                for (String pair : query.split("&")) {
+                    if (pair.startsWith("theme=")) theme = pair.substring("theme=".length());
+                }
+            }
+            byte[] body = renderSvg(System.currentTimeMillis(), NowPlayingSvg.Theme.parse(theme)).getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "image/svg+xml; charset=utf-8");
+            // The animation starts from "now" when the image loads, so a stale copy would be wrong:
+            // tell every cache (including GitHub's image proxy) to revalidate on each view.
+            ex.getResponseHeaders().add("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate");
+            ex.getResponseHeaders().add("Pragma", "no-cache");
+            ex.getResponseHeaders().add("Expires", "0");
             ex.sendResponseHeaders(200, body.length);
             ex.getResponseBody().write(body);
         }

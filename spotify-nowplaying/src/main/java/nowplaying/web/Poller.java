@@ -40,7 +40,7 @@ public final class Poller implements AutoCloseable {
                 long now = System.currentTimeMillis();
                 snapshot = new Snapshot(current.orElse(null), now, null);
 
-                if (current.isPresent() && current.get().trackId() != null) {
+                if (library != null && current.isPresent() && current.get().trackId() != null) {
                     NowPlaying track = current.get();
                     library.request(track);
                     prefetchNext(track);

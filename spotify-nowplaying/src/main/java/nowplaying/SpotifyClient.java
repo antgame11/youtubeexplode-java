@@ -75,8 +75,14 @@ public final class SpotifyClient {
         List<String> artists = new ArrayList<>();
         for (JsonNode a : item.path("artists")) artists.add(a.path("name").asText());
 
-        // Spotify lists album images from largest to smallest
-        String image = item.path("album").path("images").path(0).path("url").asText(null);
+        // Spotify lists album images from largest to smallest: use the largest for the web page and the
+        // smallest one that is still sharp at ~80px on a high-DPI screen (>= 160px) for the SVG card
+        JsonNode images = item.path("album").path("images");
+        String image = images.path(0).path("url").asText(null);
+        String thumb = image;
+        for (JsonNode img : images) {
+            if (img.path("width").asInt(0) >= 160) thumb = img.path("url").asText(thumb);
+        }
 
         return new NowPlaying(
                 item.path("id").asText(null),
@@ -86,7 +92,8 @@ public final class SpotifyClient {
                 item.path("duration_ms").asLong(),
                 isPlaying,
                 progressMs,
-                image);
+                image,
+                thumb);
     }
 
     /** Upcoming tracks in the queue (used to prefetch audio). Empty on any failure. */

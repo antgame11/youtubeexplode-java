@@ -15,6 +15,9 @@ import youtubeexplode.YoutubeClient;
  * <pre>
  * Usage: WebApp --client-id ID [--web-port 8080] [--host 127.0.0.1] [--cache DIR]
  *               [--offset-ms 0] [--spotify-port 8888]
+ *
+ * --card-only  Safe to expose publicly: serves only /now.svg, /embed and /api/now (no audio is
+ *              downloaded or served).
  * </pre>
  */
 public final class WebApp {
@@ -25,6 +28,7 @@ public final class WebApp {
         String host = "127.0.0.1";
         Path cache = Path.of("audio-cache");
         long offsetMs = 0;
+        boolean cardOnly = false;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -34,6 +38,7 @@ public final class WebApp {
                 case "--host" -> host = args[++i];
                 case "--cache" -> cache = Path.of(args[++i]);
                 case "--offset-ms" -> offsetMs = Long.parseLong(args[++i]);
+                case "--card-only" -> cardOnly = true;
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.exit(1);
@@ -62,6 +67,18 @@ public final class WebApp {
                 return spotify.queue();
             }
         };
+
+        if (cardOnly) {
+            try (Poller poller = new Poller(source, null, 2000);
+                 SyncServer server = new SyncServer(poller, null, offsetMs, host, webPort)) {
+                poller.start();
+                server.start();
+                String base = "http://" + (host.equals("0.0.0.0") ? "localhost" : host) + ":" + server.port();
+                System.out.println("Card-only mode (no audio). SVG card: " + base + "/now.svg   Embed: " + base + "/embed");
+                Thread.currentThread().join();
+            }
+            return;
+        }
 
         try (YoutubeClient youtube = new YoutubeClient()) {
             TrackLibrary library = new TrackLibrary(new YouTubeMusicResolver(youtube, cache), 2);
