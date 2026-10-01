@@ -12,15 +12,15 @@ Requires Java 17+ and Maven. ffmpeg is optional (the web player uses it to remux
 ## Quick start
 
 ```bash
-# 1. Install the library into your local Maven repo (needed once, and after library changes)
-(cd youtubeexplode-java && mvn install -DskipTests)
+# 1. Build everything (library first, then the app jar). Re-run after pulling changes.
+./build.sh                    # add --skip-tests to go faster
 
 # 2. Configure Spotify
 cp .env.example .env          # then put your client ID in .env
 #    In the Spotify dashboard, add this redirect URI to your app:
 #    http://127.0.0.1:8888/callback
 
-# 3. Run
+# 3. Run (stop and restart a running instance after rebuilding: the old code stays loaded in memory)
 cd spotify-nowplaying
 ./run.sh                      # download the song playing right now
 ./run.sh --watch              # download every new song as it starts
