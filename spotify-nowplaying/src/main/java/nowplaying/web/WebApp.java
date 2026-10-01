@@ -22,7 +22,7 @@ import youtubeexplode.YoutubeClient;
  */
 public final class WebApp {
     public static void main(String[] args) throws Exception {
-        String clientId = System.getenv("SPOTIFY_CLIENT_ID");
+        String clientId = nowplaying.Config.get("SPOTIFY_CLIENT_ID");
         int webPort = 8080;
         int spotifyPort = 8888;
         String host = "127.0.0.1";
@@ -80,7 +80,7 @@ public final class WebApp {
             return;
         }
 
-        try (YoutubeClient youtube = new YoutubeClient()) {
+        try (YoutubeClient youtube = nowplaying.YoutubeSession.open()) {
             TrackLibrary library = new TrackLibrary(new YouTubeMusicResolver(youtube, cache), 2);
             try (Poller poller = new Poller(source, library, 2000);
                  SyncServer server = new SyncServer(poller, library, offsetMs, host, webPort)) {

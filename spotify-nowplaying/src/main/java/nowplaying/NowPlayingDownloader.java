@@ -117,7 +117,7 @@ public final class NowPlayingDownloader {
     }
 
     public static void main(String[] args) throws Exception {
-        String clientId = System.getenv("SPOTIFY_CLIENT_ID");
+        String clientId = nowplaying.Config.get("SPOTIFY_CLIENT_ID");
         Path out = Path.of(".");
         boolean watch = false;
         int port = 8888;
@@ -148,7 +148,7 @@ public final class NowPlayingDownloader {
         SpotifyAuth auth = new SpotifyAuth(clientId, port, tokenFile);
         System.err.println("Spotify redirect URI (must be registered in your app): " + auth.redirectUri());
 
-        try (YoutubeClient youtube = new YoutubeClient()) {
+        try (YoutubeClient youtube = nowplaying.YoutubeSession.open()) {
             NowPlayingDownloader app = new NowPlayingDownloader(new SpotifyClient(auth), youtube, out);
             if (watch) app.runWatch();
             else app.runOnce();

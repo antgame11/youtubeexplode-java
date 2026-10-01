@@ -62,10 +62,25 @@ public class VideoController {
 
         PlayerResponse playerResponse = PlayerResponse.parse(raw);
 
-        if (!playerResponse.isAvailable()) throw new VideoUnavailableException("Video '" + videoId + "' is not available.");
-        if (!playerResponse.isPlayable()) throw new VideoUnplayableException("Video '" + videoId + "' is unplayable.");
+        if (!playerResponse.isAvailable()) {
+            throw new VideoUnavailableException("Video '" + videoId + "' is not available." + youtubeSaid(playerResponse));
+        }
+        if (!playerResponse.isPlayable()) {
+            throw new VideoUnplayableException("Video '" + videoId + "' is unplayable." + youtubeSaid(playerResponse));
+        }
 
         return playerResponse;
+    }
+
+    /**
+     * What YouTube itself said, so "not available" does not hide the real cause (for example a bot check
+     * that blocks your IP address and needs a login or a different network).
+     */
+    private static String youtubeSaid(PlayerResponse r) {
+        String status = r.playabilityStatusText();
+        String reason = r.playabilityError();
+        if (status == null && reason == null) return " YouTube returned no video details (often a blocked IP address).";
+        return " YouTube said: " + (status != null ? status : "?") + (reason != null ? " - " + reason : "") + ".";
     }
 
     private PlayerResponse getPlayerResponseForVisionOs(VideoId videoId, String visitorData) {

@@ -29,6 +29,25 @@ try (var youtube = new YoutubeClient()) {
 }
 ```
 
+## Logging in (cookies)
+
+YouTube sometimes refuses anonymous requests from servers and VPNs. The library can use a Google login:
+
+```java
+// One-time: opens Chrome/Chromium/Edge/Brave, you sign in, cookies are read and saved (mode 600)
+var cookies = GoogleLogin.login(GoogleLogin.defaultProfileDir(), Duration.ofMinutes(5), System.err::println);
+CookieStore.save(CookieStore.defaultPath(), cookies);
+
+// From then on
+try (var youtube = YoutubeClient.withLogin(CookieStore.defaultPath())) { ... }
+// youtube.getCookies() returns the current cookies (YouTube rotates some); save them again to keep the login fresh
+```
+
+Or run it from the command line: `java -cp youtubeexplode-java.jar youtubeexplode.login.LoginCli`.
+`CookieStore.load` also reads a Netscape `cookies.txt` exported by a browser extension. Treat the cookie
+file like a password. `YoutubeClient(List<HttpCookie>)` still accepts cookies you provide yourself, and the
+client sends each cookie only to hosts matching its domain.
+
 ## Differences from the C# library
 
 - **Blocking API.** C# `async`/`await`/`CancellationToken` became plain blocking calls; run them on a

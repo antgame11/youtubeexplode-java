@@ -28,7 +28,11 @@ cd spotify-nowplaying
 ./web.sh --card-only          # just the now-playing card: /now.svg (GitHub profile) and /embed
 ```
 
-The scripts load `.env` from the repo root automatically. The first run opens a browser for Spotify
+If YouTube answers "video not available" on that machine (common on servers), sign in once with
+`./run.sh login`; see [spotify-nowplaying/README.md](spotify-nowplaying/README.md#signing-in-to-youtube-fixes-video-not-available-on-some-networks).
+
+`mvn package` makes one self-contained jar, so you can also just run `java -jar` on it anywhere.
+The app reads `.env` itself (next to the jar or in the folder you run it from). The first run opens a browser for Spotify
 consent; afterwards the refresh token is kept in `~/.config/youtubeexplode-nowplaying/`.
 
 ## Configuration
@@ -38,6 +42,7 @@ consent; afterwards the refresh token is kept in `~/.config/youtubeexplode-nowpl
 | Variable | Meaning |
 |---|---|
 | `SPOTIFY_CLIENT_ID` | Client ID of your Spotify app. Not secret. No client secret is needed (PKCE login). |
+| `YOUTUBE_COOKIES_FILE` | Optional. Where the saved Google login is stored (default `~/.config/youtubeexplode/cookies.json`). |
 
 ## Tests
 

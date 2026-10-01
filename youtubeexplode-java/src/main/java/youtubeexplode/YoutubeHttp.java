@@ -33,7 +33,7 @@ public final class YoutubeHttp implements AutoCloseable {
     private static volatile HttpClient sharedClient;
 
     private final HttpClient client;
-    private final Map<String, String> cookies = new ConcurrentHashMap<>();
+    private final CookieJar cookies = new CookieJar();
 
     YoutubeHttp(HttpClient client, List<HttpCookie> initialCookies) {
         this.client = client;
@@ -43,9 +43,16 @@ public final class YoutubeHttp implements AutoCloseable {
         // The cookie is supposed to be invalidated after 13 months, at which point the value
         // becomes invalid and needs to be manually replaced in code with a new one.
         // https://policies.google.com/technologies/cookies/embedded
-        cookies.put("SOCS", "CAISEwgDEgk4MTM4MzYzNTIaAmVuIAEaBgiApPzGBg");
+        long now = System.currentTimeMillis();
+        cookies.put(new CookieJar.Entry("SOCS", "CAISEwgDEgk4MTM4MzYzNTIaAmVuIAEaBgiApPzGBg", "youtube.com", "/", true, Long.MAX_VALUE));
 
-        for (HttpCookie cookie : initialCookies) cookies.put(cookie.getName(), cookie.getValue());
+        // Cookies without a domain are assumed to belong to youtube.com
+        for (HttpCookie cookie : initialCookies) cookies.put(CookieJar.entryOf(cookie, "youtube.com", now));
+    }
+
+    /** Current cookies, including any YouTube has rotated since the client was created. */
+    List<HttpCookie> cookies() {
+        return cookies.snapshot();
     }
 
     static HttpClient sharedClient() {
@@ -91,9 +98,9 @@ public final class YoutubeHttp implements AutoCloseable {
     }
 
     private String tryGenerateAuthHeaderValue(URI uri) {
-        String sessionId = cookies.get("__Secure-3PAPISID");
-        if (sessionId == null || sessionId.isBlank()) sessionId = cookies.get("SAPISID");
-        if (sessionId == null || sessionId.isBlank()) return null;
+        String sessionId = cookies.valueFor("__Secure-3PAPISID", uri);
+        if (sessionId == null) sessionId = cookies.valueFor("SAPISID", uri);
+        if (sessionId == null) return null;
 
         long timestamp = Instant.now().getEpochSecond();
         String token = timestamp + " " + sessionId + " " + Url.domain(uri);
@@ -130,13 +137,9 @@ public final class YoutubeHttp implements AutoCloseable {
         headers.putIfAbsent("user-agent", DEFAULT_USER_AGENT);
 
         if (isYoutubeHost(uri)) {
-            if (!headers.containsKey("cookie") && !cookies.isEmpty()) {
-                StringBuilder sb = new StringBuilder();
-                cookies.forEach((k, v) -> {
-                    if (sb.length() > 0) sb.append("; ");
-                    sb.append(k).append('=').append(v);
-                });
-                headers.put("cookie", sb.toString());
+            if (!headers.containsKey("cookie")) {
+                String cookieHeader = cookies.header(uri);
+                if (cookieHeader != null) headers.put("cookie", cookieHeader);
             }
 
             if (!headers.containsKey("authorization")) {
@@ -178,7 +181,7 @@ public final class YoutubeHttp implements AutoCloseable {
                             String d = domain.startsWith(".") ? domain.substring(1) : domain;
                             if (!d.equals("youtube.com") && !d.endsWith(".youtube.com")) continue;
                         }
-                        cookies.put(cookie.getName(), cookie.getValue());
+                        cookies.put(CookieJar.entryOf(cookie, response.uri().getHost(), System.currentTimeMillis()));
                     }
                 } catch (IllegalArgumentException ignored) {
                     // Malformed cookie

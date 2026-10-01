@@ -41,6 +41,11 @@ public final class PlayerResponse {
         return Json.at(content, "videoDetails");
     }
 
+    /** YouTube's own status, e.g. "OK", "ERROR", "LOGIN_REQUIRED". May be null. */
+    public String playabilityStatusText() {
+        return playabilityStatus();
+    }
+
     public String playabilityError() {
         return Json.str(playability(), "reason");
     }

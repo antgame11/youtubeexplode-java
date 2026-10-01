@@ -20,6 +20,53 @@ album and duration) and downloads its audio, using [youtubeexplode-java](../yout
 The first run opens a browser for Spotify consent. The refresh token is stored in
 `~/.config/youtubeexplode-nowplaying/spotify.json` (mode 600), so later runs are silent.
 
+## One jar
+
+`mvn package` produces a single runnable jar with everything inside
+(`target/spotify-nowplaying-1.0.0-SNAPSHOT.jar`, about 3 MB). You can copy that one file anywhere:
+
+```bash
+java -jar spotify-nowplaying-1.0.0-SNAPSHOT.jar                 # download the song playing now
+java -jar spotify-nowplaying-1.0.0-SNAPSHOT.jar web             # web player on :8080
+java -jar spotify-nowplaying-1.0.0-SNAPSHOT.jar web --card-only # GitHub card + embed only
+java -jar spotify-nowplaying-1.0.0-SNAPSHOT.jar login           # sign in to Google (see below)
+java -jar spotify-nowplaying-1.0.0-SNAPSHOT.jar help
+```
+
+It reads `SPOTIFY_CLIENT_ID` from the environment or from a `.env` file next to the jar (or in the
+folder you run it from, or their parent folders). `run.sh` and `web.sh` are just shortcuts that build the
+jar if needed and run it.
+
+## Signing in to YouTube (fixes "video not available" on some networks)
+
+YouTube sometimes refuses requests from servers, VPNs and shared IP addresses, which shows up as
+`Video '...' is not available`. Signing in to a Google account often gets past that:
+
+```bash
+./run.sh login      # or: java -jar <jar> login
+```
+
+A browser window (Chrome, Chromium, Edge or Brave, whichever is installed) opens on the Google sign-in
+page, with its own separate profile. Sign in as you normally would, including 2-step verification. The
+program watches for the login to complete, reads the cookies from the browser, closes the window by
+itself and saves them to `~/.config/youtubeexplode/cookies.json` (readable only by you). If the window
+doesn't close, press Enter in the terminal. From then on every run uses the saved login automatically,
+and refreshes it when YouTube rotates the cookies. `./run.sh logout` deletes it.
+
+- Your password is typed into the real Google page, never into this program.
+- Google refuses sign-ins from embedded browsers and from browsers that look automated ("This browser
+  or app may not be secure"). Chrome marks itself as automated whenever remote debugging is on, so the
+  login window is started with that marker switched off, and the program only talks to the browser itself,
+  never to a page. If you still see that message, use Chrome, Edge or Brave instead of Chromium
+  (`YOUTUBE_BROWSER=/path/to/browser`).
+- On a machine without a screen, log in elsewhere and copy `cookies.json` over (see above).
+- The cookie file lets anyone who has it act as your Google account: keep it private, never commit it
+  (it is outside the repo by default). A throwaway account is safer than your main one.
+- Set `YOUTUBE_BROWSER` to a browser executable if none is found automatically.
+- A login may not be enough if the IP address itself is blocked, and it expires after a while:
+  run `login` again if the errors come back. When something still fails, the error now includes what
+  YouTube actually answered (e.g. `LOGIN_REQUIRED - Sign in to confirm you're not a bot`).
+
 ## Web player (listen along)
 
 A small website that plays what you're playing on Spotify, at the same position, and follows along

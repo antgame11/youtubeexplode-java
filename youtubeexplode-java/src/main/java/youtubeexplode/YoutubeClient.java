@@ -1,9 +1,14 @@
 package youtubeexplode;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.HttpCookie;
 import java.net.http.HttpClient;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import youtubeexplode.channels.ChannelClient;
+import youtubeexplode.login.CookieStore;
 import youtubeexplode.music.MusicClient;
 import youtubeexplode.playlists.PlaylistClient;
 import youtubeexplode.search.SearchClient;
@@ -41,6 +46,31 @@ public final class YoutubeClient implements AutoCloseable {
 
     public YoutubeClient() {
         this(YoutubeHttp.sharedClient());
+    }
+
+    /**
+     * Creates a client that uses a saved YouTube login (see {@link CookieStore} and
+     * {@link youtubeexplode.login.GoogleLogin}). If the file is null or does not exist, the client is
+     * simply not logged in.
+     */
+    public static YoutubeClient withLogin(Path cookiesFile) {
+        List<HttpCookie> cookies = List.of();
+        if (cookiesFile != null && Files.exists(cookiesFile)) {
+            try {
+                cookies = CookieStore.load(cookiesFile);
+            } catch (IOException e) {
+                throw new UncheckedIOException("Could not read the saved YouTube login " + cookiesFile, e);
+            }
+        }
+        return new YoutubeClient(cookies);
+    }
+
+    /**
+     * The client's current cookies, including any that YouTube rotated while the client was in use.
+     * Save them with {@link CookieStore#save} to keep a login alive.
+     */
+    public List<HttpCookie> getCookies() {
+        return http.cookies();
     }
 
     /** Operations related to YouTube videos. */
