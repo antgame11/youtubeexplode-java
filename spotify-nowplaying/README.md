@@ -37,35 +37,33 @@ It reads `SPOTIFY_CLIENT_ID` from the environment or from a `.env` file next to 
 folder you run it from, or their parent folders). `run.sh` and `web.sh` are just shortcuts that build the
 jar if needed and run it.
 
-## Signing in to YouTube (fixes "video not available" on some networks)
+## Signing in to YouTube (experimental, usually not needed)
 
-YouTube sometimes refuses requests from servers, VPNs and shared IP addresses, which shows up as
-`Video '...' is not available`. Signing in to a Google account often gets past that:
+`./run.sh login` opens a browser, you sign in to Google, and the cookies are saved to
+`~/.config/youtubeexplode/cookies.json` (readable only by you; `./run.sh logout` deletes them).
 
-```bash
-./run.sh login      # or: java -jar <jar> login
-```
+**What it does and doesn't do today.** Tested against the live service:
 
-A browser window (Chrome, Chromium, Edge or Brave, whichever is installed) opens on the Google sign-in
-page, with its own separate profile. Sign in as you normally would, including 2-step verification. The
-program watches for the login to complete, reads the cookies from the browser, closes the window by
-itself and saves them to `~/.config/youtubeexplode/cookies.json` (readable only by you). If the window
-doesn't close, press Enter in the terminal. From then on every run uses the saved login automatically,
-and refreshes it when YouTube rotates the cookies. `./run.sh logout` deletes it.
+- Downloads use YouTube's VisionOS and Android clients. Those clients **ignore a Google login completely**
+  (an age-restricted video still says "sign in to confirm your age" with your cookies attached), so the saved
+  login does **not** make more videos downloadable and does **not** get past an IP block.
+- The clients that do honor a login (TV, web, mobile web) only return streams ciphered with YouTube's current,
+  heavily obfuscated player script. Decoding that needs a JavaScript engine running the script (this is why
+  yt-dlp now needs Deno or Node), which this library does not have.
+- So the login is kept for future use (and for the web page requests), but don't expect it to fix
+  `Video '...' is not available`.
 
-- Your password is typed into the real Google page, never into this program.
-- Google refuses sign-ins from embedded browsers and from browsers that look automated ("This browser
-  or app may not be secure"). Chrome marks itself as automated whenever remote debugging is on, so the
-  login window is started with that marker switched off, and the program only talks to the browser itself,
-  never to a page. If you still see that message, use Chrome, Edge or Brave instead of Chromium
-  (`YOUTUBE_BROWSER=/path/to/browser`).
-- On a machine without a screen, log in elsewhere and copy `cookies.json` over (see above).
-- The cookie file lets anyone who has it act as your Google account: keep it private, never commit it
-  (it is outside the repo by default). A throwaway account is safer than your main one.
-- Set `YOUTUBE_BROWSER` to a browser executable if none is found automatically.
-- A login may not be enough if the IP address itself is blocked, and it expires after a while:
-  run `login` again if the errors come back. When something still fails, the error now includes what
-  YouTube actually answered (e.g. `LOGIN_REQUIRED - Sign in to confirm you're not a bot`).
+If you do see that error, the message now lists what each YouTube client answered, for example
+`VisionOS: ... YouTube said: LOGIN_REQUIRED - Sign in to confirm you're not a bot | Android: ...`.
+That text is the real cause. Typically it is YouTube blocking the IP address (servers, VPNs, shared or
+datacenter addresses). Running from a normal home connection is what fixes that.
+
+Notes on the login window: Google refuses sign-ins from embedded browsers and from browsers that look
+automated ("This browser or app may not be secure"). Chrome marks itself as automated whenever remote
+debugging is on, so the window is started with that marker switched off, and the program only talks to the
+browser itself, never to a page. If you still see that message, use Chrome, Edge or Brave instead of
+Chromium (`YOUTUBE_BROWSER=/path/to/browser`). On a machine without a screen, log in elsewhere and copy
+`cookies.json` over. The cookie file lets anyone who has it act as your Google account: keep it private.
 
 ## Web player (listen along)
 

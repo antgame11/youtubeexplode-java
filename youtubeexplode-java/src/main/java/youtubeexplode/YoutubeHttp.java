@@ -80,14 +80,23 @@ public final class YoutubeHttp implements AutoCloseable {
     }
 
     /**
-     * Request description; a new {@link HttpRequest} is built for every attempt.
-     *
-     * @param anonymous do not send the user's login (cookies and Authorization). YouTube's mobile app clients
-     *     (iOS, Android, visionOS) are rejected with HTTP 400 when a web login comes along.
+     * How much of the user's login a request carries. Findings against the live service: YouTube answers
+     * HTTP 400 "Request contains an invalid argument" when cookies <em>and</em> the signed Authorization header
+     * are sent together to anything but the web clients, and the mobile app clients ignore a login entirely.
      */
-    public record Request(String method, String url, String body, Map<String, String> headers, boolean anonymous) {
+    public enum Login {
+        /** Cookies and the SAPISIDHASH Authorization header (web clients). */
+        FULL,
+        /** Cookies only (TV client). */
+        COOKIES_ONLY,
+        /** Nothing but the consent cookie (mobile app clients). */
+        NONE
+    }
+
+    /** Request description; a new {@link HttpRequest} is built for every attempt. */
+    public record Request(String method, String url, String body, Map<String, String> headers, Login login) {
         public Request(String method, String url, String body, Map<String, String> headers) {
-            this(method, url, body, headers, false);
+            this(method, url, body, headers, Login.FULL);
         }
 
         public static Request get(String url) {
@@ -111,7 +120,11 @@ public final class YoutubeHttp implements AutoCloseable {
         }
 
         public Request asAnonymous() {
-            return new Request(method, url, body, headers, true);
+            return new Request(method, url, body, headers, Login.NONE);
+        }
+
+        public Request cookiesOnly() {
+            return new Request(method, url, body, headers, Login.COOKIES_ONLY);
         }
     }
 
@@ -168,11 +181,11 @@ public final class YoutubeHttp implements AutoCloseable {
 
         if (isYoutubeHost(uri)) {
             if (!headers.containsKey("cookie")) {
-                String cookieHeader = request.anonymous() ? anonymousCookieHeader(uri) : cookies.header(uri);
+                String cookieHeader = request.login() == Login.NONE ? anonymousCookieHeader(uri) : cookies.header(uri);
                 if (cookieHeader != null) headers.put("cookie", cookieHeader);
             }
 
-            if (!request.anonymous() && !headers.containsKey("authorization")) {
+            if (request.login() == Login.FULL && !headers.containsKey("authorization")) {
                 String auth = tryGenerateAuthHeaderValue(uri);
                 if (auth != null) headers.put("authorization", auth);
             }

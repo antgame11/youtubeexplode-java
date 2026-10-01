@@ -42,6 +42,11 @@ public final class PlayerSource {
         return value == null || value.isBlank() ? null : value;
     }
 
+    /** The player's signature timestamp (sent to YouTube so it ciphers streams for this player version), or null. */
+    public String signatureTimestamp() {
+        return group(SIGNATURE_TIMESTAMP, content, 1);
+    }
+
     /** Returns the cipher manifest, or null if it could not be extracted. */
     public synchronized CipherManifest cipherManifest() {
         if (!cipherResolved) {

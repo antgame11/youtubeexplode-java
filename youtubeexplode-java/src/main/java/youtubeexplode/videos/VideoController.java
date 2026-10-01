@@ -1,9 +1,15 @@
 package youtubeexplode.videos;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import youtubeexplode.YoutubeHttp;
 import youtubeexplode.bridge.PlayerResponse;
+import youtubeexplode.bridge.PlayerSource;
 import youtubeexplode.bridge.VideoWatchPage;
 import youtubeexplode.exceptions.HttpStatusException;
 import youtubeexplode.exceptions.VideoUnavailableException;
@@ -18,6 +24,22 @@ public class VideoController {
 
     public VideoController(YoutubeHttp http) {
         this.http = http;
+    }
+
+    private static final Pattern PLAYER_VERSION = Pattern.compile("player\\\\?/([0-9a-fA-F]{8})\\\\?/");
+
+    private PlayerSource playerSource;
+
+    /** The current player script (base.js). Fetched once per controller. */
+    public synchronized PlayerSource getPlayerSource() {
+        if (playerSource != null) return playerSource;
+
+        String iframe = http.getString("https://www.youtube.com/iframe_api");
+        Matcher m = PLAYER_VERSION.matcher(iframe);
+        if (!m.find() || m.group(1).isBlank()) throw new YoutubeExplodeException("Failed to extract the player version.");
+
+        return playerSource = PlayerSource.parse(
+                http.getString("https://www.youtube.com/s/player/" + m.group(1) + "/player_ias.vflset/en_US/base.js"));
     }
 
     private String resolveVisitorData() {
@@ -58,14 +80,14 @@ public class VideoController {
         }
     }
 
-    /**
-     * @param anonymous mobile app clients must not be sent the web login (cookies, Authorization): YouTube
-     *     answers those requests with HTTP 400
-     */
-    private PlayerResponse requestPlayerResponse(VideoId videoId, String body, String userAgent, boolean anonymous) {
+    private PlayerResponse requestPlayerResponse(VideoId videoId, String body, String userAgent, YoutubeHttp.Login login) {
         YoutubeHttp.Request request = YoutubeHttp.Request.postJson(
                 "https://www.youtube.com/youtubei/v1/player", body, Map.of("User-Agent", userAgent));
-        String raw = http.string(anonymous ? request.asAnonymous() : request);
+        String raw = http.string(switch (login) {
+            case NONE -> request.asAnonymous();
+            case COOKIES_ONLY -> request.cookiesOnly();
+            case FULL -> request;
+        });
 
         PlayerResponse playerResponse = PlayerResponse.parse(raw);
 
@@ -117,7 +139,7 @@ public class VideoController {
                 videoId,
                 body,
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
-                true);
+                YoutubeHttp.Login.NONE);
     }
 
     private PlayerResponse getPlayerResponseForAndroid(VideoId videoId, String visitorData) {
@@ -143,24 +165,33 @@ public class VideoController {
                 """.formatted(Json.encode(videoId.getValue()), Json.encode(visitorData));
 
         return requestPlayerResponse(
-                videoId, body, "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip", true);
+                videoId, body, "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip", YoutubeHttp.Login.NONE);
     }
 
+    /**
+     * The TV client. It honors a web login (cookies only: with the Authorization header too YouTube answers
+     * HTTP 400). It needs the player's signature timestamp, and its streams are ciphered with a scheme that
+     * only a JavaScript engine running YouTube's player script can solve, so this library cannot download
+     * from it today. (The "embedded" TV client the original library used here was retired by YouTube: it
+     * answers "YouTube is no longer supported in this application".)
+     */
     private PlayerResponse getPlayerResponseForTv(VideoId videoId, String visitorData, String signatureTimestamp) {
+        String sts = !Strings.isBlank(signatureTimestamp) ? signatureTimestamp : getPlayerSource().signatureTimestamp();
+        if (Strings.isBlank(sts)) throw new YoutubeExplodeException("Failed to extract the signature timestamp.");
+
         String body = """
                 {
                   "videoId": %s,
+                  "contentCheckOk": true,
+                  "racyCheckOk": true,
                   "context": {
                     "client": {
-                      "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-                      "clientVersion": "2.0",
+                      "clientName": "TVHTML5_SIMPLY",
+                      "clientVersion": "1.0",
                       "visitorData": %s,
                       "hl": "en",
                       "gl": "US",
                       "utcOffsetMinutes": 0
-                    },
-                    "thirdParty": {
-                      "embedUrl": "https://www.youtube.com"
                     }
                   },
                   "playbackContext": {
@@ -169,13 +200,13 @@ public class VideoController {
                     }
                   }
                 }
-                """.formatted(Json.encode(videoId.getValue()), Json.encode(visitorData), Json.encode(signatureTimestamp));
+                """.formatted(Json.encode(videoId.getValue()), Json.encode(visitorData), Json.encode(sts));
 
         return requestPlayerResponse(
                 videoId,
                 body,
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36",
-                false);
+                YoutubeHttp.Login.COOKIES_ONLY);
     }
 
     public PlayerResponse getPlayerResponse(VideoId videoId, String signatureTimestamp) {
@@ -185,20 +216,29 @@ public class VideoController {
         // imposes signature ciphering, so we only use this client if we have a signature timestamp.
         if (!Strings.isBlank(signatureTimestamp)) return getPlayerResponseForTv(videoId, visitorData, signatureTimestamp);
 
-        try {
-            // VisionOS is the primary client, as it works for most videos
-            return getPlayerResponseForVisionOs(videoId, visitorData);
-        } catch (VideoUnplayableException | HttpStatusException first) {
-            // Android is used as a fallback as it works for certain other videos, such as videos intended for kids
+        // The clients to try, in order. Only these return plain download URLs. They are anonymous: the mobile
+        // clients ignore a web login (and reject one that sends cookies together with Authorization).
+        List<String> names = List.of("VisionOS", "Android");
+        List<Supplier<PlayerResponse>> attempts = List.of(
+                () -> getPlayerResponseForVisionOs(videoId, visitorData),
+                () -> getPlayerResponseForAndroid(videoId, visitorData)); // works for some videos VisionOS refuses, e.g. for kids
+
+        List<String> failures = new ArrayList<>();
+        RuntimeException last = null;
+        for (int i = 0; i < attempts.size(); i++) {
             try {
-                return getPlayerResponseForAndroid(videoId, visitorData);
-            } catch (VideoUnplayableException | HttpStatusException second) {
-                // The mobile clients cannot use a login. If we have one, the TV client can: it is the way past
-                // checks that block anonymous requests (for example from server IP addresses).
-                if (http.hasLogin()) return getPlayerResponseForTv(videoId, visitorData, null);
-                throw second;
+                return attempts.get(i).get();
+            } catch (YoutubeExplodeException | HttpStatusException e) {
+                failures.add(names.get(i) + ": " + e.getMessage());
+                last = e;
             }
         }
+
+        // Every client failed. Say what each one answered: the last answer alone hides the real cause.
+        if (failures.size() == 1) throw last;
+        String report = "Video '" + videoId + "' could not be loaded by any YouTube client. " + String.join(" | ", failures);
+        if (last instanceof VideoUnavailableException) throw new VideoUnavailableException(report);
+        throw new VideoUnplayableException(report);
     }
 
     public PlayerResponse getPlayerResponse(VideoId videoId) {

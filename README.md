@@ -28,8 +28,10 @@ cd spotify-nowplaying
 ./web.sh --card-only          # just the now-playing card: /now.svg (GitHub profile) and /embed
 ```
 
-If YouTube answers "video not available" on that machine (common on servers), sign in once with
-`./run.sh login`; see [spotify-nowplaying/README.md](spotify-nowplaying/README.md#signing-in-to-youtube-fixes-video-not-available-on-some-networks).
+If YouTube answers "video not available" on a machine, the error lists what each YouTube client said. It is
+usually an IP block (servers, VPNs, datacenter addresses): run from a normal home connection. A Google login
+(`./run.sh login`) does not help with that today; see
+[spotify-nowplaying/README.md](spotify-nowplaying/README.md#signing-in-to-youtube-experimental-usually-not-needed).
 
 `mvn package` makes one self-contained jar, so you can also just run `java -jar` on it anywhere.
 The app reads `.env` itself (next to the jar or in the folder you run it from). The first run opens a browser for Spotify

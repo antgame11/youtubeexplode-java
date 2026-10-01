@@ -45,7 +45,8 @@ public final class StreamClient {
         if (cipherManifest != null) return cipherManifest;
 
         CipherManifest manifest = controller.getPlayerSource().cipherManifest();
-        if (manifest == null) throw new YoutubeExplodeException("Failed to extract the cipher manifest.");
+        if (manifest == null) throw new YoutubeExplodeException("Failed to extract the cipher manifest: YouTube's player script has changed and this "
+                    + "stream needs it decoded. Streams that do not need it (most videos) still work.");
 
         return cipherManifest = manifest;
     }

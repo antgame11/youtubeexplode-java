@@ -20,9 +20,8 @@ public final class Main {
               web        Web player that plays what you're playing, in sync. Open http://127.0.0.1:8080
                          Options: --web-port 8080  --host 127.0.0.1  --cache DIR  --offset-ms 0
                                   --card-only (only the /now.svg card and /embed, no audio)
-              login      Sign in to your Google account in a browser window and save the login. Helps
-                         when YouTube answers "video not available", e.g. on a server IP address.
-                         Needs a screen.
+              login      Sign in to your Google account in a browser window and save the login
+                         (experimental: it does not currently make more videos downloadable). Needs a screen.
               logout     Delete the saved login.
 
             Settings come from environment variables or a .env file: SPOTIFY_CLIENT_ID,
@@ -54,9 +53,10 @@ public final class Main {
         } catch (YoutubeExplodeException e) {
             // A readable message instead of a stack trace
             System.err.println("YouTube error: " + e.getMessage());
-            if (!YoutubeSession.isLoggedIn()) {
-                System.err.println("Hint: YouTube sometimes refuses requests from servers or VPN addresses. "
-                        + "Run `java -jar spotify-nowplaying.jar login` to sign in to a Google account and try again.");
+            if (e.getMessage() != null && e.getMessage().contains("not available")) {
+                System.err.println("Hint: the message above says what each YouTube client answered. A block on your IP address "
+                        + "(servers, VPNs, shared addresses) is the usual cause; a normal home connection fixes it. "
+                        + "A Google login does not help with that.");
             }
             System.exit(1);
         }

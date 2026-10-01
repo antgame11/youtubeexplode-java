@@ -31,22 +31,20 @@ try (var youtube = new YoutubeClient()) {
 
 ## Logging in (cookies)
 
-YouTube sometimes refuses anonymous requests from servers and VPNs. The library can use a Google login:
+The library can sign in to Google in a real browser window and keep the cookies:
 
 ```java
-// One-time: opens Chrome/Chromium/Edge/Brave, you sign in, cookies are read and saved (mode 600)
 var cookies = GoogleLogin.login(GoogleLogin.defaultProfileDir(), Duration.ofMinutes(5), System.err::println);
-CookieStore.save(CookieStore.defaultPath(), cookies);
-
-// From then on
+CookieStore.save(CookieStore.defaultPath(), cookies);          // mode 600
 try (var youtube = YoutubeClient.withLogin(CookieStore.defaultPath())) { ... }
-// youtube.getCookies() returns the current cookies (YouTube rotates some); save them again to keep the login fresh
 ```
 
-Or run it from the command line: `java -cp youtubeexplode-java.jar youtubeexplode.login.LoginCli`.
-`CookieStore.load` also reads a Netscape `cookies.txt` exported by a browser extension. Treat the cookie
-file like a password. `YoutubeClient(List<HttpCookie>)` still accepts cookies you provide yourself, and the
-client sends each cookie only to hosts matching its domain.
+`CookieStore.load` also reads a Netscape `cookies.txt`. Treat the file like a password. **Limits (tested against
+the live service):** the clients that return plain download URLs (VisionOS, Android) ignore a login, and the
+clients that honor one return ciphered streams that need a JavaScript engine to decode, so a login does not
+unlock downloads or get past IP blocks today. Cookies and the signed `Authorization` header must not be sent
+together to anything but the web clients (YouTube answers HTTP 400), so the library sends the mobile clients no
+login and the TV client cookies only. Errors from the player endpoint list what every client answered.
 
 ## Differences from the C# library
 
